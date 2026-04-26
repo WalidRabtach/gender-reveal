@@ -1110,19 +1110,18 @@ function ReactionReview({videoBlob,gender,slug,onSend,onDiscard}) {
 
   const share=async(ch)=>{
     setUploading(true);
-    const file=new File([videoBlob],"ma-reaction-gender-reveal.mp4",{type:videoBlob.type});
+    // Use correct extension based on actual mime type
+    const ext=videoBlob.type.includes("mp4")?"mp4":"webm";
+    const file=new File([videoBlob],`ma-reaction-gender-reveal.${ext}`,{type:videoBlob.type});
     setUploading(false);
-    // Web Share API — device proposes all available apps (WhatsApp, SMS, Mail, AirDrop...)
     if(navigator.canShare?.({files:[file]})){
       try{
         await navigator.share({files:[file],title:"Ma réaction Gender Reveal 🎉"});
         setSent(true);onSend(ch);return;
       }catch(e){
-        // User cancelled — do nothing
         if(e.name==="AbortError")return;
       }
     }
-    // Fallback for browsers without Web Share API — just download
     dlOnly();
   };
 
@@ -1206,13 +1205,18 @@ function RevealPage({config,onBack}) {
   const Scene=SCENES[config.anim]||SceneConfetti;
   const bg=flow==="waiting"?BG0:phase===2?(config.gender==="girl"?BG_GIRL:BG_BOY):phase===1?BG1:BG0;
 
+  const camVideoRef=useRef(null); // separate ref for PiP during animation
+
   const toggleCam=async()=>{
     if(camOn){streamRef.current?.getTracks().forEach(t=>t.stop());streamRef.current=null;setCamOn(false);}
     else{
       try{
-        const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:640},height:{ideal:480}},audio:true});
+        const s=await navigator.mediaDevices.getUserMedia({
+          video:{facingMode:"user",width:{ideal:640},height:{ideal:480}},
+          audio:true
+        });
         streamRef.current=s;
-        if(vRef.current)vRef.current.srcObject=s;
+        if(vRef.current){vRef.current.srcObject=s;vRef.current.play().catch(()=>{});}
         setCamOn(true);
       }catch{alert("Impossible d'accéder à la caméra.");}
     }
@@ -1222,20 +1226,23 @@ function RevealPage({config,onBack}) {
     setFlow("animating");
     audio.play(config.anim,config.gender);
 
-    // Start recording if camera on
+    // Start recording directly from camera stream
     if(streamRef.current&&window.MediaRecorder){
       chunksRef.current=[];
-      const mime=["video/webm;codecs=vp9","video/webm","video/mp4"].find(m=>MediaRecorder.isTypeSupported(m))||"";
-      try {
+      // Try MP4 first for WhatsApp compatibility, fallback to webm
+      const mime=["video/mp4","video/webm;codecs=vp9","video/webm"]
+        .find(m=>MediaRecorder.isTypeSupported(m))||"";
+      try{
         const rec=new MediaRecorder(streamRef.current,mime?{mimeType:mime}:{});
         recRef.current=rec;
         rec.ondataavailable=e=>{if(e.data?.size>0)chunksRef.current.push(e.data);};
         rec.start(500);
-      } catch(e) { console.warn("Recording failed:", e); }
+      }catch(e){console.warn("Recording failed:",e);}
     }
 
     let cur=0;t0Ref.current=performance.now();
     const phases=PHASES[config.anim]||PHASES.confetti;
+    let revealReached=false;
 
     const tick=(now)=>{
       const el=now-t0Ref.current,d=phases[cur].d,p=Math.min(el/d,1);
@@ -1243,31 +1250,35 @@ function RevealPage({config,onBack}) {
       if(p>=1&&cur<phases.length-1){
         cur++;t0Ref.current=now;setPhase(cur);
         if(cur===2){
+          revealReached=true;
           const c=document.getElementById("cfx");
           if(c&&["confetti","gift","rainbow"].includes(config.anim))runConfetti(c,config.gender,12000);
         }
       }
       if(p>=1&&cur===phases.length-1){
         cancelAnimationFrame(rafRef.current);
+        // Wait 7 extra seconds after reveal so we capture the full reaction
         setTimeout(()=>{
           audio.stop();
           if(recRef.current&&recRef.current.state!=="inactive"){
             recRef.current.onstop=()=>{
-              const b=new Blob(chunksRef.current,{type:"video/webm"});
-              if(b.size>1000){
+              const mimeType=recRef.current.mimeType||"video/webm";
+              const b=new Blob(chunksRef.current,{type:mimeType});
+              if(b.size>5000){
                 setBlob(b);
                 streamRef.current?.getTracks().forEach(t=>t.stop());
                 setFlow("review");
-              } else {
+              }else{
                 streamRef.current?.getTracks().forEach(t=>t.stop());
                 setFlow("done");
               }
             };
             recRef.current.stop();
-          } else {
+          }else{
             setFlow("done");
           }
-        },2000);return;
+        },7000); // 7 seconds after reveal ends
+        return;
       }
       rafRef.current=requestAnimationFrame(tick);
     };
@@ -1341,15 +1352,22 @@ function RevealPage({config,onBack}) {
 
       {flow==="animating"&&<>
         <canvas ref={compRef} style={{display:"none"}} width={640} height={480}/>
-        {/* Simple cam PiP — no compositing to avoid performance issues */}
+        {/* Camera PiP — visible during animation */}
         {camOn&&streamRef.current&&(
-          <div style={{position:"fixed",bottom:20,right:16,zIndex:200,borderRadius:14,overflow:"hidden",border:"2px solid rgba(255,255,255,0.6)",boxShadow:"0 4px 24px rgba(0,0,0,0.5)",width:100,height:75}}>
-            <video autoPlay muted playsInline
-              ref={el=>{if(el&&streamRef.current)el.srcObject=streamRef.current;}}
-              style={{width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)",display:"block"}}/>
-            <div style={{position:"absolute",top:4,left:5,display:"flex",alignItems:"center",gap:3,background:"rgba(0,0,0,0.55)",borderRadius:20,padding:"2px 5px"}}>
-              <div style={{width:5,height:5,borderRadius:"50%",background:"#FF3B30",animation:"twinkle 1s infinite"}}/>
-              <span style={{fontSize:"0.5rem",color:"white",fontFamily:"'DM Sans',sans-serif"}}>REC</span>
+          <div style={{position:"fixed",bottom:20,right:16,zIndex:200,borderRadius:14,overflow:"hidden",border:"2px solid rgba(255,255,255,0.7)",boxShadow:"0 4px 24px rgba(0,0,0,0.6)",width:110,height:82,background:"#000"}}>
+            <video
+              autoPlay muted playsInline
+              ref={el=>{
+                if(el&&streamRef.current&&el.srcObject!==streamRef.current){
+                  el.srcObject=streamRef.current;
+                  el.play().catch(()=>{});
+                }
+              }}
+              style={{width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)",display:"block"}}
+            />
+            <div style={{position:"absolute",top:4,left:5,display:"flex",alignItems:"center",gap:3,background:"rgba(0,0,0,0.6)",borderRadius:20,padding:"2px 6px"}}>
+              <div style={{width:6,height:6,borderRadius:"50%",background:"#FF3B30",animation:"twinkle 1s infinite"}}/>
+              <span style={{fontSize:"0.52rem",color:"white",fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.06em"}}>REC</span>
             </div>
           </div>
         )}
