@@ -1100,34 +1100,34 @@ function ReactionReview({videoBlob,gender,slug,onSend,onDiscard}) {
   const [watching,setWatching]=useState(false);
   const [sent,setSent]=useState(false);
   const [uploading,setUploading]=useState(false);
+  const [shareError,setShareError]=useState(false);
   const vRef=useRef(null);
   const vUrl=useState(()=>URL.createObjectURL(videoBlob))[0];
   const bg=gender==="girl"?BG_GIRL:BG_BOY;
+  const ext=videoBlob.type.includes("mp4")?"mp4":"webm";
 
   useEffect(()=>()=>URL.revokeObjectURL(vUrl),[]);
 
   const handleWatch=()=>{setWatching(true);setTimeout(()=>{if(vRef.current){vRef.current.src=vUrl;vRef.current.play().catch(()=>{});}},50);};
 
-  const share=async(ch)=>{
-    setUploading(true);
-    // Use correct extension based on actual mime type
-    const ext=videoBlob.type.includes("mp4")?"mp4":"webm";
-    const file=new File([videoBlob],`ma-reaction-gender-reveal.${ext}`,{type:videoBlob.type});
-    setUploading(false);
-    if(navigator.canShare?.({files:[file]})){
+  const share=async()=>{
+    setShareError(false);
+    const file=new File([videoBlob],`ma-reaction.${ext}`,{type:videoBlob.type});
+    if(navigator.canShare&&navigator.canShare({files:[file]})){
       try{
         await navigator.share({files:[file],title:"Ma réaction Gender Reveal 🎉"});
-        setSent(true);onSend(ch);return;
+        setSent(true);onSend("share");return;
       }catch(e){
         if(e.name==="AbortError")return;
       }
     }
     dlOnly();
+    setShareError(true);
   };
 
   const dlOnly=()=>{
     const a=document.createElement("a");
-    a.href=vUrl;a.download="ma-reaction-gender-reveal.mp4";a.click();
+    a.href=vUrl;a.download=`ma-reaction-gender-reveal.${ext}`;a.click();
   };
 
   const B={width:"100%",padding:"0.9rem 1.5rem",borderRadius:40,fontFamily:"'DM Sans',sans-serif",
@@ -1143,7 +1143,7 @@ function ReactionReview({videoBlob,gender,slug,onSend,onDiscard}) {
           <p style={{color:"rgba(255,255,255,0.6)",fontSize:"0.86rem",marginBottom:"1.6rem",lineHeight:1.55}}>{t.watch} avant de décider si vous voulez l'envoyer aux parents.</p>
           {watching?(
             <div style={{borderRadius:16,overflow:"hidden",marginBottom:"1.4rem",background:"#000",aspectRatio:"4/3",position:"relative"}}>
-              <video ref={vRef} playsInline controls loop style={{width:"100%",height:"100%",objectFit:"cover",display:"block",transform:"scaleX(-1)"}}/>
+              <video ref={vRef} playsInline controls loop style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
             </div>
           ):(
             <div style={{borderRadius:16,overflow:"hidden",marginBottom:"1.4rem",background:"rgba(0,0,0,0.4)",aspectRatio:"4/3",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",border:"1.5px solid rgba(255,255,255,0.15)",cursor:"pointer"}} onClick={handleWatch}>
@@ -1158,7 +1158,7 @@ function ReactionReview({videoBlob,gender,slug,onSend,onDiscard}) {
 
           <div style={{display:"flex",flexDirection:"column",gap:"0.6rem",marginBottom:"0.8rem"}}>
             {/* Native share — lets the device propose all available apps */}
-            <button onClick={()=>share("native")} disabled={uploading}
+            <button onClick={share} disabled={uploading}
               style={{...B,background:"white",color:"#1a1a2e",opacity:uploading?0.7:1}}>
               {uploading?"⏳…":"📤 Partager ma réaction"}
             </button>
@@ -1168,6 +1168,11 @@ function ReactionReview({videoBlob,gender,slug,onSend,onDiscard}) {
               ⬇️ Télécharger sur mon appareil
             </button>
           </div>
+          {shareError&&(
+            <div style={{background:"rgba(255,255,255,0.1)",borderRadius:12,padding:"0.75rem",marginBottom:"0.75rem",fontSize:"0.78rem",color:"rgba(255,255,255,0.85)",lineHeight:1.5}}>
+              💡 Vidéo téléchargée ! Partagez-la depuis votre galerie photo.
+            </div>
+          )}
           <button onClick={onDiscard}
             style={{background:"none",border:"none",color:"rgba(255,255,255,0.35)",fontSize:"0.8rem",cursor:"pointer",textDecoration:"underline",fontFamily:"'DM Sans',sans-serif"}}>
             Fermer sans partager
@@ -1205,20 +1210,29 @@ function RevealPage({config,onBack}) {
   const Scene=SCENES[config.anim]||SceneConfetti;
   const bg=flow==="waiting"?BG0:phase===2?(config.gender==="girl"?BG_GIRL:BG_BOY):phase===1?BG1:BG0;
 
-  const camVideoRef=useRef(null); // separate ref for PiP during animation
-
   const toggleCam=async()=>{
     if(camOn){streamRef.current?.getTracks().forEach(t=>t.stop());streamRef.current=null;setCamOn(false);}
     else{
       try{
+        // Request video + audio for reaction recording
         const s=await navigator.mediaDevices.getUserMedia({
           video:{facingMode:"user",width:{ideal:640},height:{ideal:480}},
-          audio:true
+          audio:{echoCancellation:true,noiseSuppression:true}
         });
         streamRef.current=s;
         if(vRef.current){vRef.current.srcObject=s;vRef.current.play().catch(()=>{});}
         setCamOn(true);
-      }catch{alert("Impossible d'accéder à la caméra.");}
+      }catch(e){
+        // If audio fails, try video only
+        try{
+          const s=await navigator.mediaDevices.getUserMedia({
+            video:{facingMode:"user"},audio:false
+          });
+          streamRef.current=s;
+          if(vRef.current){vRef.current.srcObject=s;vRef.current.play().catch(()=>{});}
+          setCamOn(true);
+        }catch{alert("Impossible d'accéder à la caméra.");}
+      }
     }
   };
 
@@ -1226,23 +1240,37 @@ function RevealPage({config,onBack}) {
     setFlow("animating");
     audio.play(config.anim,config.gender);
 
-    // Start recording directly from camera stream
     if(streamRef.current&&window.MediaRecorder){
       chunksRef.current=[];
-      // Try MP4 first for WhatsApp compatibility, fallback to webm
-      const mime=["video/mp4","video/webm;codecs=vp9","video/webm"]
-        .find(m=>MediaRecorder.isTypeSupported(m))||"";
+      // Try formats in order of widest compatibility
+      // video/mp4 with H.264+AAC works on iOS, Android, WhatsApp, Samsung
+      const mimeTypes=[
+        "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+        "video/mp4;codecs=h264,aac",
+        "video/mp4",
+        "video/webm;codecs=vp8,opus",
+        "video/webm;codecs=vp9,opus",
+        "video/webm",
+        ""
+      ];
+      const mime=mimeTypes.find(m=>{
+        try{return m===""||MediaRecorder.isTypeSupported(m);}catch(e){return false;}
+      })||"";
+
       try{
-        const rec=new MediaRecorder(streamRef.current,mime?{mimeType:mime}:{});
+        const opts=mime?{mimeType:mime,videoBitsPerSecond:2000000,audioBitsPerSecond:128000}
+                       :{videoBitsPerSecond:2000000};
+        const rec=new MediaRecorder(streamRef.current,opts);
         recRef.current=rec;
         rec.ondataavailable=e=>{if(e.data?.size>0)chunksRef.current.push(e.data);};
         rec.start(500);
-      }catch(e){console.warn("Recording failed:",e);}
+      }catch(e){
+        console.warn("Recording failed:",e);
+      }
     }
 
     let cur=0;t0Ref.current=performance.now();
     const phases=PHASES[config.anim]||PHASES.confetti;
-    let revealReached=false;
 
     const tick=(now)=>{
       const el=now-t0Ref.current,d=phases[cur].d,p=Math.min(el/d,1);
@@ -1250,14 +1278,13 @@ function RevealPage({config,onBack}) {
       if(p>=1&&cur<phases.length-1){
         cur++;t0Ref.current=now;setPhase(cur);
         if(cur===2){
-          revealReached=true;
           const c=document.getElementById("cfx");
           if(c&&["confetti","gift","rainbow"].includes(config.anim))runConfetti(c,config.gender,12000);
         }
       }
       if(p>=1&&cur===phases.length-1){
         cancelAnimationFrame(rafRef.current);
-        // Wait 7 extra seconds after reveal so we capture the full reaction
+        // 7 extra seconds to capture the full reaction
         setTimeout(()=>{
           audio.stop();
           if(recRef.current&&recRef.current.state!=="inactive"){
@@ -1274,10 +1301,8 @@ function RevealPage({config,onBack}) {
               }
             };
             recRef.current.stop();
-          }else{
-            setFlow("done");
-          }
-        },7000); // 7 seconds after reveal ends
+          }else setFlow("done");
+        },7000);
         return;
       }
       rafRef.current=requestAnimationFrame(tick);
