@@ -1200,15 +1200,21 @@ function RevealPage({config,onBack}) {
   const t0Ref=useRef(null);
   const compRef=useRef(null);
 
+  // Is this a guest (opened via shared link)?
+  const isGuest = !!config.slug;
+
   const Scene=SCENES[config.anim]||SceneConfetti;
   const bg=flow==="waiting"?BG0:phase===2?(config.gender==="girl"?BG_GIRL:BG_BOY):phase===1?BG1:BG0;
 
   const toggleCam=async()=>{
     if(camOn){streamRef.current?.getTracks().forEach(t=>t.stop());streamRef.current=null;setCamOn(false);}
     else{
-      try{const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user"},audio:true});
-        streamRef.current=s;if(vRef.current)vRef.current.srcObject=s;setCamOn(true);}
-      catch{alert("Impossible d'accéder à la caméra.");}
+      try{
+        const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:640},height:{ideal:480}},audio:true});
+        streamRef.current=s;
+        if(vRef.current)vRef.current.srcObject=s;
+        setCamOn(true);
+      }catch{alert("Impossible d'accéder à la caméra.");}
     }
   };
 
@@ -1216,15 +1222,16 @@ function RevealPage({config,onBack}) {
     setFlow("animating");
     audio.play(config.anim,config.gender);
 
-    if(streamRef.current&&window.MediaRecorder&&compRef.current){
+    // Start recording if camera on
+    if(streamRef.current&&window.MediaRecorder){
       chunksRef.current=[];
       const mime=["video/webm;codecs=vp9","video/webm","video/mp4"].find(m=>MediaRecorder.isTypeSupported(m))||"";
-      const cs=compRef.current.captureStream(30);
-      streamRef.current.getAudioTracks().forEach(t=>cs.addTrack(t));
-      const rec=new MediaRecorder(cs,mime?{mimeType:mime}:{});
-      recRef.current=rec;
-      rec.ondataavailable=e=>{if(e.data?.size>0)chunksRef.current.push(e.data);};
-      rec.start(200);
+      try {
+        const rec=new MediaRecorder(streamRef.current,mime?{mimeType:mime}:{});
+        recRef.current=rec;
+        rec.ondataavailable=e=>{if(e.data?.size>0)chunksRef.current.push(e.data);};
+        rec.start(500);
+      } catch(e) { console.warn("Recording failed:", e); }
     }
 
     let cur=0;t0Ref.current=performance.now();
@@ -1233,19 +1240,33 @@ function RevealPage({config,onBack}) {
     const tick=(now)=>{
       const el=now-t0Ref.current,d=phases[cur].d,p=Math.min(el/d,1);
       setProg(p);
-      if(p>=1&&cur<phases.length-1){cur++;t0Ref.current=now;setPhase(cur);
-        if(cur===2){const c=document.getElementById("cfx");
-          if(c&&["confetti","gift","rainbow"].includes(config.anim))runConfetti(c,config.gender,12000);}
+      if(p>=1&&cur<phases.length-1){
+        cur++;t0Ref.current=now;setPhase(cur);
+        if(cur===2){
+          const c=document.getElementById("cfx");
+          if(c&&["confetti","gift","rainbow"].includes(config.anim))runConfetti(c,config.gender,12000);
+        }
       }
       if(p>=1&&cur===phases.length-1){
         cancelAnimationFrame(rafRef.current);
         setTimeout(()=>{
+          audio.stop();
           if(recRef.current&&recRef.current.state!=="inactive"){
             recRef.current.onstop=()=>{
               const b=new Blob(chunksRef.current,{type:"video/webm"});
-              setBlob(b);streamRef.current?.getTracks().forEach(t=>t.stop());setFlow("review");
-            };recRef.current.stop();
-          }else setFlow("done");
+              if(b.size>1000){
+                setBlob(b);
+                streamRef.current?.getTracks().forEach(t=>t.stop());
+                setFlow("review");
+              } else {
+                streamRef.current?.getTracks().forEach(t=>t.stop());
+                setFlow("done");
+              }
+            };
+            recRef.current.stop();
+          } else {
+            setFlow("done");
+          }
         },2000);return;
       }
       rafRef.current=requestAnimationFrame(tick);
@@ -1253,18 +1274,33 @@ function RevealPage({config,onBack}) {
     rafRef.current=requestAnimationFrame(tick);
   };
 
-  useEffect(()=>()=>{cancelAnimationFrame(rafRef.current);audio.stop();streamRef.current?.getTracks().forEach(t=>t.stop());},[]);
+  useEffect(()=>()=>{
+    cancelAnimationFrame(rafRef.current);
+    audio.stop();
+    streamRef.current?.getTracks().forEach(t=>t.stop());
+  },[]);
 
-  if(flow==="review"&&blob)return <ReactionReview videoBlob={blob} gender={config.gender} slug={config.slug||null} onSend={()=>setFlow("done")} onDiscard={()=>setFlow("done")}/>;
+  if(flow==="review"&&blob){
+    return <ReactionReview videoBlob={blob} gender={config.gender} slug={config.slug||null} onSend={()=>setFlow("done")} onDiscard={()=>setFlow("done")}/>;
+  }
 
   if(flow==="done"){
     return(
       <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:config.gender==="girl"?BG_GIRL:BG_BOY,padding:"2rem"}}>
         <div style={{textAlign:"center",color:"white"}}>
           <div style={{fontSize:"4rem",marginBottom:"1rem"}}>✨</div>
-          <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:"2rem",marginBottom:"0.75rem"}}>{config.gender==="girl"?t.its_girl:t.its_boy}</h2>
-          <p style={{opacity:0.7,marginBottom:"2rem",fontSize:"0.95rem"}}>{config.gender==="girl"?t.she:t.he}</p>
-          <button onClick={()=>{audio.stop();onBack();}} style={{padding:"0.75rem 2rem",borderRadius:40,background:"rgba(255,255,255,0.2)",border:"1.5px solid rgba(255,255,255,0.3)",color:"white",fontFamily:"'DM Sans',sans-serif",fontSize:"0.9rem",cursor:"pointer"}}>{t.back}</button>
+          <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:"clamp(1.8rem,6vw,2.5rem)",marginBottom:"0.75rem"}}>
+            {config.gender==="girl"?t.its_girl:t.its_boy}
+          </h2>
+          <p style={{opacity:0.8,marginBottom:"2rem",fontSize:"1rem"}}>
+            {config.gender==="girl"?t.she:t.he}
+          </p>
+          {/* Only show back button if not a guest */}
+          {!isGuest&&(
+            <button onClick={()=>{audio.stop();onBack();}} style={{padding:"0.75rem 2rem",borderRadius:40,background:"rgba(255,255,255,0.2)",border:"1.5px solid rgba(255,255,255,0.3)",color:"white",fontFamily:"'DM Sans',sans-serif",fontSize:"0.9rem",cursor:"pointer"}}>
+              {t.back}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -1272,7 +1308,12 @@ function RevealPage({config,onBack}) {
 
   return(
     <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:bg,transition:"background 1.8s ease",overflow:"hidden",position:"relative",padding:"2rem"}}>
-      <button className="nav-back" onClick={()=>{audio.stop();onBack();}} style={{background:"rgba(255,255,255,0.15)",color:"white",border:"1px solid rgba(255,255,255,0.3)"}}>{t.back}</button>
+      {/* Only show back button if not a guest */}
+      {!isGuest&&(
+        <button className="nav-back" onClick={()=>{audio.stop();onBack();}} style={{background:"rgba(255,255,255,0.15)",color:"white",border:"1px solid rgba(255,255,255,0.3)"}}>
+          {t.back}
+        </button>
+      )}
 
       {flow==="waiting"&&(
         <div style={{textAlign:"center",color:"white",maxWidth:480}}>
@@ -1282,11 +1323,13 @@ function RevealPage({config,onBack}) {
             <button onClick={toggleCam} style={{display:"inline-flex",alignItems:"center",gap:"0.6rem",background:camOn?"rgba(255,255,255,0.25)":"rgba(255,255,255,0.12)",border:`1.5px solid ${camOn?"rgba(255,255,255,0.6)":"rgba(255,255,255,0.3)"}`,color:"white",padding:"0.7rem 1.3rem",borderRadius:"30px",cursor:"pointer",fontFamily:"'DM Sans',sans-serif",fontSize:"0.85rem",backdropFilter:"blur(8px)"}}>
               {camOn?t.cam_on:t.cam_off}
             </button>
-            {camOn&&<div style={{marginTop:"1rem",position:"relative",display:"inline-block"}}>
-              <video ref={vRef} autoPlay muted playsInline style={{width:180,height:135,borderRadius:16,objectFit:"cover",border:"2px solid rgba(255,255,255,0.5)",display:"block",transform:"scaleX(-1)"}}/>
-              <div style={{position:"absolute",top:8,right:8,width:10,height:10,borderRadius:"50%",background:"#FF3B30",boxShadow:"0 0 6px #FF3B30",animation:"twinkle 1s ease-in-out infinite"}}/>
-              <p style={{fontSize:"0.7rem",opacity:0.55,marginTop:"0.4rem",letterSpacing:"0.08em"}}>{t.cam_note}</p>
-            </div>}
+            {camOn&&(
+              <div style={{marginTop:"1rem",position:"relative",display:"inline-block"}}>
+                <video ref={vRef} autoPlay muted playsInline style={{width:160,height:120,borderRadius:16,objectFit:"cover",border:"2px solid rgba(255,255,255,0.5)",display:"block",transform:"scaleX(-1)"}}/>
+                <div style={{position:"absolute",top:8,right:8,width:10,height:10,borderRadius:"50%",background:"#FF3B30",boxShadow:"0 0 6px #FF3B30",animation:"twinkle 1s ease-in-out infinite"}}/>
+                <p style={{fontSize:"0.7rem",opacity:0.55,marginTop:"0.4rem",letterSpacing:"0.08em"}}>{t.cam_note}</p>
+              </div>
+            )}
           </div>
           <button style={{background:"white",color:"var(--deep)",border:"none",padding:"1.2rem 3.5rem",borderRadius:"60px",fontFamily:"'Playfair Display',serif",fontSize:"1.2rem",cursor:"pointer",boxShadow:"0 8px 40px rgba(0,0,0,0.3)"}}
             onMouseEnter={e=>e.currentTarget.style.transform="scale(1.04)"}
@@ -1298,13 +1341,15 @@ function RevealPage({config,onBack}) {
 
       {flow==="animating"&&<>
         <canvas ref={compRef} style={{display:"none"}} width={640} height={480}/>
+        {/* Simple cam PiP — no compositing to avoid performance issues */}
         {camOn&&streamRef.current&&(
-          <div style={{position:"fixed",bottom:20,right:16,zIndex:200,borderRadius:14,overflow:"hidden",border:"2px solid rgba(255,255,255,0.6)",boxShadow:"0 4px 24px rgba(0,0,0,0.5)",width:120,height:90}}>
-            <video autoPlay muted playsInline ref={el=>{if(el&&streamRef.current)el.srcObject=streamRef.current;}}
+          <div style={{position:"fixed",bottom:20,right:16,zIndex:200,borderRadius:14,overflow:"hidden",border:"2px solid rgba(255,255,255,0.6)",boxShadow:"0 4px 24px rgba(0,0,0,0.5)",width:100,height:75}}>
+            <video autoPlay muted playsInline
+              ref={el=>{if(el&&streamRef.current)el.srcObject=streamRef.current;}}
               style={{width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)",display:"block"}}/>
-            <div style={{position:"absolute",top:5,left:6,display:"flex",alignItems:"center",gap:3,background:"rgba(0,0,0,0.55)",borderRadius:20,padding:"2px 6px"}}>
-              <div style={{width:6,height:6,borderRadius:"50%",background:"#FF3B30",animation:"twinkle 1s infinite"}}/>
-              <span style={{fontSize:"0.55rem",color:"white",letterSpacing:"0.06em",fontFamily:"'DM Sans',sans-serif"}}>REC</span>
+            <div style={{position:"absolute",top:4,left:5,display:"flex",alignItems:"center",gap:3,background:"rgba(0,0,0,0.55)",borderRadius:20,padding:"2px 5px"}}>
+              <div style={{width:5,height:5,borderRadius:"50%",background:"#FF3B30",animation:"twinkle 1s infinite"}}/>
+              <span style={{fontSize:"0.5rem",color:"white",fontFamily:"'DM Sans',sans-serif"}}>REC</span>
             </div>
           </div>
         )}
