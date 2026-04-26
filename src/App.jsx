@@ -419,14 +419,25 @@ const ANIMS = [
 // ─── Audio Engine ─────────────────────────────────────────────────────────────
 class FairyAudio {
   constructor() { this.ctx=null; this.nodes=[]; }
-  boot() { if(this.ctx)return; this.ctx=new(window.AudioContext||window.webkitAudioContext)(); }
+  boot() {
+    if(this.ctx)return;
+    this.ctx=new(window.AudioContext||window.webkitAudioContext)();
+    // Master gain → speakers + recording destination
+    this.master=this.ctx.createGain();
+    this.master.gain.value=0.85;
+    this.master.connect(this.ctx.destination);
+    // Also route to MediaStream for direct recording (no mic needed)
+    this.recDest=this.ctx.createMediaStreamDestination();
+    this.master.connect(this.recDest);
+  }
+  getAudioTrack() { return this.recDest?.stream.getAudioTracks()[0]||null; }
   stop() { this.nodes.forEach(n=>{try{n.stop?.();}catch(e){}}); this.nodes=[]; if(this.ctx){this.ctx.close();this.ctx=null;} }
   bell(f,t,dec=1.4,g=0.22) {
     if(!this.ctx)return;
     const o=this.ctx.createOscillator(),o2=this.ctx.createOscillator(),gn=this.ctx.createGain(),g2=this.ctx.createGain();
     o.type="sine";o.frequency.value=f;o2.type="sine";o2.frequency.value=f*2.756;g2.gain.value=0.08;
     gn.gain.setValueAtTime(g,t);gn.gain.exponentialRampToValueAtTime(0.0001,t+dec);
-    o.connect(gn);o2.connect(g2);g2.connect(gn);gn.connect(this.ctx.destination);
+    o.connect(gn);o2.connect(g2);g2.connect(gn);gn.connect(this.master);
     o.start(t);o.stop(t+dec+0.05);o2.start(t);o2.stop(t+dec+0.05);this.nodes.push(o,o2);
   }
   harp(f,t,g=0.15) {
@@ -434,14 +445,14 @@ class FairyAudio {
     const o=this.ctx.createOscillator(),gn=this.ctx.createGain();
     o.type="sine";o.frequency.value=f;
     gn.gain.setValueAtTime(0,t);gn.gain.linearRampToValueAtTime(g,t+0.008);gn.gain.exponentialRampToValueAtTime(0.0001,t+1.1);
-    o.connect(gn);gn.connect(this.ctx.destination);o.start(t);o.stop(t+1.2);this.nodes.push(o);
+    o.connect(gn);gn.connect(this.master);o.start(t);o.stop(t+1.2);this.nodes.push(o);
   }
   sparkle(f,t,g=0.1) {
     if(!this.ctx)return;
     const o=this.ctx.createOscillator(),gn=this.ctx.createGain();
     o.type="sine";o.frequency.value=f;
     gn.gain.setValueAtTime(g,t);gn.gain.exponentialRampToValueAtTime(0.0001,t+0.35);
-    o.connect(gn);gn.connect(this.ctx.destination);o.start(t);o.stop(t+0.4);this.nodes.push(o);
+    o.connect(gn);gn.connect(this.master);o.start(t);o.stop(t+0.4);this.nodes.push(o);
   }
   pad(f,t,dur,g=0.05) {
     if(!this.ctx)return;
@@ -450,7 +461,7 @@ class FairyAudio {
       o.type="sine";o.frequency.value=f+d;
       gn.gain.setValueAtTime(0,t);gn.gain.linearRampToValueAtTime(g,t+1);
       gn.gain.setValueAtTime(g,t+dur-1);gn.gain.linearRampToValueAtTime(0,t+dur);
-      o.connect(gn);gn.connect(this.ctx.destination);o.start(t);o.stop(t+dur+0.1);this.nodes.push(o);
+      o.connect(gn);gn.connect(this.master);o.start(t);o.stop(t+dur+0.1);this.nodes.push(o);
     });
   }
   gliss(base,t,steps=10,sp=0.055,g=0.13) {
@@ -587,10 +598,20 @@ function ProgressBar({progress,color}) {
   );
 }
 
+// ─── Phase-aware color — neutral during suspense, reveal color at phase 2 ────
+function sceneColor(phase, gender) {
+  if (phase < 2) return "#C9A96E"; // gold/neutral — no gender hint
+  return gender === "girl" ? "#FF8FB1" : "#74C0E8";
+}
+function sceneBg(phase, gender) {
+  if (phase < 2) return "linear-gradient(135deg,#1a1209 0%,#2a1f0a 100%)"; // dark warm neutral
+  return gender === "girl" ? BG_GIRL : BG_BOY;
+}
+
 // ─── Scene components ─────────────────────────────────────────────────────────
 function SceneConfetti({phase,progress,gender}) {
   const {t}=useLang();
-  const color=gender==="girl"?"#FF8FB1":"#74C0E8";
+  const color=sceneColor(phase,gender);
   const icons=gender==="girl"?["💗","🎀","🌸","💕"]:["💙","⭐","🌊","🎠"];
   return (
     <div style={{position:"fixed",inset:0,display:"flex",alignItems:"center",justifyContent:"center",color:"white",textAlign:"center"}}>
@@ -621,7 +642,7 @@ function SceneConfetti({phase,progress,gender}) {
 
 function SceneBalloons({phase,progress,gender}) {
   const {t}=useLang();
-  const color=gender==="girl"?"#FF8FB1":"#74C0E8";
+  const color=sceneColor(phase,gender);
   const icons=gender==="girl"?["🩷","💗","🎀","🌸","💕"]:["🩵","💙","⭐","🌊","🎠"];
   const [balls]=useState(()=>Array.from({length:16},(_,i)=>({
     icon:icons[i%icons.length],left:`${4+i*6}%`,dur:3.5+Math.random()*3,
@@ -660,7 +681,7 @@ function SceneBalloons({phase,progress,gender}) {
 
 function SceneStars({phase,progress,gender}) {
   const {t}=useLang();
-  const color=gender==="girl"?"#FF8FB1":"#74C0E8";
+  const color=sceneColor(phase,gender);
   const icons=gender==="girl"?["💫","🌸","✨","💕","🌟"]:["💫","⭐","✨","💙","🌟"];
   return (
     <div style={{position:"fixed",inset:0,display:"flex",alignItems:"center",justifyContent:"center",color:"white",textAlign:"center"}}>
@@ -685,7 +706,7 @@ function SceneStars({phase,progress,gender}) {
 
 function SceneGift({phase,progress,gender}) {
   const {t}=useLang();
-  const color=gender==="girl"?"#FF8FB1":"#74C0E8";
+  const color=sceneColor(phase,gender);
   const shakeX=phase===1?Math.sin(progress*Math.PI*28)*(4+progress*8):0;
   const lidY=phase===2?Math.min(progress*3,1)*-140:0;
   const glow=phase===2?Math.min(progress*3,1):0;
@@ -719,7 +740,7 @@ function SceneGift({phase,progress,gender}) {
 
 function SceneButterfly({phase,progress,gender}) {
   const {t}=useLang();
-  const color=gender==="girl"?"#FF8FB1":"#74C0E8";
+  const color=sceneColor(phase,gender);
   const icons=gender==="girl"?["🦋","🌸","💕","🌺","🌷"]:["🦋","🌊","💙","⭐","🌿"];
   return (
     <div style={{position:"fixed",inset:0,display:"flex",alignItems:"center",justifyContent:"center",color:"white",textAlign:"center"}}>
@@ -746,7 +767,7 @@ function SceneButterfly({phase,progress,gender}) {
 
 function SceneRainbow({phase,progress,gender}) {
   const {t}=useLang();
-  const color=gender==="girl"?"#FF8FB1":"#74C0E8";
+  const color=sceneColor(phase,gender);
   const arcColors=gender==="girl"?["#FFB3C6","#FF8FB1","#FF6B9D","#E8567A","#C44569","#9B2335"]:["#B3D9FF","#74C0E8","#4A90D9","#2C5F8A","#1E4080","#5BC0EB"];
   const arcP=phase===1?progress:phase===2?1:0;
   return (
@@ -1240,36 +1261,91 @@ function RevealPage({config,onBack}) {
     setFlow("animating");
     audio.play(config.anim,config.gender);
 
-    if(streamRef.current&&window.MediaRecorder){
+    if(streamRef.current&&window.MediaRecorder&&compRef.current){
       chunksRef.current=[];
-      // Try formats in order of widest compatibility
-      // video/mp4 with H.264+AAC works on iOS, Android, WhatsApp, Samsung
+
+      const canvas=compRef.current;
+      const ctx2d=canvas.getContext("2d");
+      canvas.width=640; canvas.height=480;
+
+      // Composite loop: colored bg + camera PiP
+      let compositing=true;
+      let currentPhaseRef={v:0};
+
+      const drawFrame=()=>{
+        if(!compositing)return;
+        const W=canvas.width, H=canvas.height;
+
+        // Background color: neutral until phase 2
+        const ph=currentPhaseRef.v;
+        const bgColor = ph<2 ? "#1a1209"
+          : config.gender==="girl" ? "#C44569" : "#2C5F8A";
+        ctx2d.fillStyle=bgColor;
+        ctx2d.fillRect(0,0,W,H);
+
+        // Draw "Gender Reveal" text as visual indicator
+        ctx2d.fillStyle=ph<2?"#C9A96E":"white";
+        ctx2d.font=`bold ${W*0.04}px serif`;
+        ctx2d.textAlign="center";
+        ctx2d.fillText(
+          ph<2 ? "✨ Gender Reveal ✨" :
+          config.gender==="girl" ? "C'est une fille ! 🩷" : "C'est un garçon ! 🩵",
+          W/2, H*0.12
+        );
+
+        // Progress bar at bottom
+        if(ph<2){
+          ctx2d.fillStyle="rgba(255,255,255,0.15)";
+          ctx2d.fillRect(W*0.1, H*0.88, W*0.8, 6);
+          ctx2d.fillStyle="#C9A96E";
+          ctx2d.fillRect(W*0.1, H*0.88, W*0.8*Math.min((Date.now()%30000)/30000,1), 6);
+        }
+
+        // Camera PiP — centered, large
+        const camEl=document.querySelector(".cam-pip-video");
+        if(camEl&&camEl.readyState>=2){
+          const pw=W*0.7, ph2=H*0.65;
+          const px=(W-pw)/2, py=(H-ph2)/2+H*0.05;
+          ctx2d.save();
+          ctx2d.translate(px+pw, py); ctx2d.scale(-1,1); // mirror
+          ctx2d.drawImage(camEl,0,0,pw,ph2);
+          ctx2d.restore();
+          // REC badge
+          ctx2d.fillStyle="rgba(0,0,0,0.6)";
+          ctx2d.beginPath(); ctx2d.roundRect(px+8,py+8,52,22,11); ctx2d.fill();
+          ctx2d.fillStyle="#FF3B30";
+          ctx2d.beginPath(); ctx2d.arc(px+20,py+19,5,0,Math.PI*2); ctx2d.fill();
+          ctx2d.fillStyle="white"; ctx2d.font="bold 11px sans-serif";
+          ctx2d.textAlign="left"; ctx2d.fillText("REC",px+29,py+23);
+        }
+
+        requestAnimationFrame(drawFrame);
+      };
+      drawFrame();
+
+      // Capture canvas stream
+      const canvasStream=canvas.captureStream(25);
+
+      // Add direct Web Audio output (no mic artifacts)
+      const audioTrack=audio.getAudioTrack();
+      if(audioTrack) canvasStream.addTrack(audioTrack);
+
       const mimeTypes=[
-        "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
-        "video/mp4;codecs=h264,aac",
-        "video/mp4",
-        "video/webm;codecs=vp8,opus",
-        "video/webm;codecs=vp9,opus",
-        "video/webm",
-        ""
+        "video/webm;codecs=vp8,opus","video/webm;codecs=vp9,opus",
+        "video/webm","video/mp4",""
       ];
-      const mime=mimeTypes.find(m=>{
-        try{return m===""||MediaRecorder.isTypeSupported(m);}catch(e){return false;}
-      })||"";
+      const mime=mimeTypes.find(m=>{try{return m===""||MediaRecorder.isTypeSupported(m);}catch(e){return false;}})||"";
 
       try{
-        const opts=mime?{mimeType:mime,videoBitsPerSecond:2000000,audioBitsPerSecond:128000}
-                       :{videoBitsPerSecond:2000000};
-        const rec=new MediaRecorder(streamRef.current,opts);
+        const rec=new MediaRecorder(canvasStream,mime?{mimeType:mime,videoBitsPerSecond:2000000}:{});
         recRef.current=rec;
         rec.ondataavailable=e=>{if(e.data?.size>0)chunksRef.current.push(e.data);};
         rec.start(500);
-      }catch(e){
-        console.warn("Recording failed:",e);
-      }
+        compRef._stopComposite=()=>{compositing=false;};
+      }catch(e){console.warn("Recording failed:",e);}
     }
 
-    let cur=0;t0Ref.current=performance.now();
+    let cur=0; t0Ref.current=performance.now();
     const phases=PHASES[config.anim]||PHASES.confetti;
 
     const tick=(now)=>{
@@ -1277,28 +1353,24 @@ function RevealPage({config,onBack}) {
       setProg(p);
       if(p>=1&&cur<phases.length-1){
         cur++;t0Ref.current=now;setPhase(cur);
+        if(compRef.current) compRef._phaseRef=cur;
         if(cur===2){
-          const c=document.getElementById("cfx");
-          if(c&&["confetti","gift","rainbow"].includes(config.anim))runConfetti(c,config.gender,12000);
+          const cfx=document.getElementById("cfx");
+          if(cfx&&["confetti","gift","rainbow"].includes(config.anim))runConfetti(cfx,config.gender,12000);
         }
       }
       if(p>=1&&cur===phases.length-1){
         cancelAnimationFrame(rafRef.current);
-        // 7 extra seconds to capture the full reaction
         setTimeout(()=>{
           audio.stop();
+          compRef._stopComposite?.();
           if(recRef.current&&recRef.current.state!=="inactive"){
             recRef.current.onstop=()=>{
               const mimeType=recRef.current.mimeType||"video/webm";
               const b=new Blob(chunksRef.current,{type:mimeType});
-              if(b.size>5000){
-                setBlob(b);
-                streamRef.current?.getTracks().forEach(t=>t.stop());
-                setFlow("review");
-              }else{
-                streamRef.current?.getTracks().forEach(t=>t.stop());
-                setFlow("done");
-              }
+              streamRef.current?.getTracks().forEach(t=>t.stop());
+              if(b.size>5000){setBlob(b);setFlow("review");}
+              else setFlow("done");
             };
             recRef.current.stop();
           }else setFlow("done");
@@ -1382,6 +1454,7 @@ function RevealPage({config,onBack}) {
           <div style={{position:"fixed",bottom:20,right:16,zIndex:200,borderRadius:14,overflow:"hidden",border:"2px solid rgba(255,255,255,0.7)",boxShadow:"0 4px 24px rgba(0,0,0,0.6)",width:110,height:82,background:"#000"}}>
             <video
               autoPlay muted playsInline
+              className="cam-pip-video"
               ref={el=>{
                 if(el&&streamRef.current&&el.srcObject!==streamRef.current){
                   el.srcObject=streamRef.current;
