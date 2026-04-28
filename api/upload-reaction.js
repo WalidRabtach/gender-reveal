@@ -1,6 +1,4 @@
-export const config = {
-  api: { bodyParser: false }
-};
+export const config = { api: { bodyParser: false } };
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -22,6 +20,9 @@ export default async function handler(req, res) {
     for await (const chunk of req) chunks.push(chunk);
     const buffer = Buffer.concat(chunks);
 
+    const contentType = req.headers['content-type'] || 'video/webm';
+    const base64 = `data:${contentType};base64,${buffer.toString('base64')}`;
+
     const { createHash } = await import('crypto');
     const timestamp = Math.round(Date.now() / 1000);
     const folder = 'reactions';
@@ -29,34 +30,19 @@ export default async function handler(req, res) {
       .update(`folder=${folder}&timestamp=${timestamp}${apiSecret}`)
       .digest('hex');
 
-    const boundary = '----Boundary' + Date.now();
-    const CRLF = '\r\n';
-    const addField = (name, value) =>
-      `--${boundary}${CRLF}Content-Disposition: form-data; name="${name}"${CRLF}${CRLF}${value}${CRLF}`;
-
-    let formParts = '';
-    formParts += addField('api_key', apiKey);
-    formParts += addField('timestamp', String(timestamp));
-    formParts += addField('signature', signature);
-    formParts += addField('folder', folder);
-    formParts += addField('resource_type', 'video');
-
-    const body = Buffer.concat([
-      Buffer.from(formParts, 'utf8'),
-      Buffer.from(`--${boundary}${CRLF}Content-Disposition: form-data; name="file"; filename="reaction.webm"${CRLF}Content-Type: video/webm${CRLF}${CRLF}`, 'utf8'),
-      buffer,
-      Buffer.from(`${CRLF}--${boundary}--${CRLF}`, 'utf8')
-    ]);
-
     const uploadRes = await fetch(
       `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`,
       {
         method: 'POST',
-        headers: {
-          'Content-Type': `multipart/form-data; boundary=${boundary}`,
-          'Content-Length': String(body.length),
-        },
-        body,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          file: base64,
+          api_key: apiKey,
+          timestamp: String(timestamp),
+          signature,
+          folder,
+          resource_type: 'video',
+        }),
       }
     );
 
