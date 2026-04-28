@@ -1286,28 +1286,32 @@ function RevealPage({config,onBack}) {
     if(streamRef.current&&window.MediaRecorder){
       chunksRef.current=[];
 
-      // Build a combined stream: camera video + Web Audio output
+      // Mix microphone + Web Audio music into one audio stream
       const combinedStream=new MediaStream();
-
-      // Add camera video track
       streamRef.current.getVideoTracks().forEach(t=>combinedStream.addTrack(t));
 
-      // Add Web Audio output directly (high quality, no mic artifacts)
-      const audioTrack=audio.getAudioTrack();
-      if(audioTrack) combinedStream.addTrack(audioTrack);
+      try {
+        // Create an AudioContext mixer
+        const mixDest = audio.ctx.createMediaStreamDestination();
+        // 1. Route fairy music to mix
+        if(audio.master) audio.master.connect(mixDest);
+        // 2. Route microphone to mix
+        if(streamRef.current.getAudioTracks().length>0){
+          const micSource = audio.ctx.createMediaStreamSource(streamRef.current);
+          micSource.connect(mixDest);
+        }
+        mixDest.stream.getAudioTracks().forEach(t=>combinedStream.addTrack(t));
+      } catch(e) {
+        // Fallback: just use Web Audio track
+        const audioTrack=audio.getAudioTrack();
+        if(audioTrack) combinedStream.addTrack(audioTrack);
+      }
 
-      const mimeTypes=[
-        "video/webm;codecs=vp8,opus",
-        "video/webm;codecs=vp9,opus",
-        "video/webm",""
-      ];
-      const mime=mimeTypes.find(m=>{
-        try{return m===""||MediaRecorder.isTypeSupported(m);}catch(e){return false;}
-      })||"";
+      const mimeTypes=["video/webm;codecs=vp8,opus","video/webm;codecs=vp9,opus","video/webm",""];
+      const mime=mimeTypes.find(m=>{try{return m===""||MediaRecorder.isTypeSupported(m);}catch(e){return false;}})||"";
 
       try{
-        const rec=new MediaRecorder(combinedStream,
-          mime?{mimeType:mime,videoBitsPerSecond:2500000}:{videoBitsPerSecond:2500000});
+        const rec=new MediaRecorder(combinedStream,mime?{mimeType:mime,videoBitsPerSecond:2500000}:{});
         recRef.current=rec;
         rec.ondataavailable=e=>{if(e.data?.size>0)chunksRef.current.push(e.data);};
         rec.start(300);
@@ -1330,7 +1334,6 @@ function RevealPage({config,onBack}) {
       }
       if(p>=1&&cur===phases.length-1){
         cancelAnimationFrame(rafRef.current);
-        // Wait 7s to capture reaction after reveal
         setTimeout(()=>{
           audio.stop();
           if(recRef.current&&recRef.current.state!=="inactive"){
@@ -1338,12 +1341,8 @@ function RevealPage({config,onBack}) {
               const mimeType=recRef.current.mimeType||"video/webm";
               const b=new Blob(chunksRef.current,{type:mimeType});
               streamRef.current?.getTracks().forEach(t=>t.stop());
-              if(b.size>10000){
-                setBlob(b);
-                setFlow("review");
-              }else{
-                setFlow("done");
-              }
+              if(b.size>10000){setBlob(b);setFlow("review");}
+              else setFlow("done");
             };
             recRef.current.stop();
           }else{
@@ -1424,7 +1423,10 @@ function RevealPage({config,onBack}) {
       )}
 
       {flow==="animating"&&<>
-        <canvas ref={compRef} style={{display:"none"}} width={640} height={480}/>
+        {/* Canvas hidden but visible to GPU for capture */}
+        <canvas ref={compRef}
+          style={{position:"fixed",top:0,left:0,width:1,height:1,opacity:0,pointerEvents:"none"}}
+          width={640} height={480}/>
         {/* Camera PiP — visible during animation */}
         {camOn&&streamRef.current&&(
           <div style={{position:"fixed",bottom:20,right:16,zIndex:200,borderRadius:14,overflow:"hidden",border:"2px solid rgba(255,255,255,0.7)",boxShadow:"0 4px 24px rgba(0,0,0,0.6)",width:110,height:82,background:"#000"}}>
