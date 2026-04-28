@@ -1121,7 +1121,9 @@ function ReactionReview({videoBlob,gender,slug,onSend,onDiscard}) {
   const [watching,setWatching]=useState(false);
   const [sent,setSent]=useState(false);
   const [uploading,setUploading]=useState(false);
-  const [shareError,setShareError]=useState(false);
+  const [mp4Link,setMp4Link]=useState(null);
+  const [uploadError,setUploadError]=useState(false);
+  const [linkCopied,setLinkCopied]=useState(false);
   const vRef=useRef(null);
   const vUrl=useState(()=>URL.createObjectURL(videoBlob))[0];
   const bg=gender==="girl"?BG_GIRL:BG_BOY;
@@ -1129,111 +1131,170 @@ function ReactionReview({videoBlob,gender,slug,onSend,onDiscard}) {
 
   useEffect(()=>()=>URL.revokeObjectURL(vUrl),[]);
 
-  const handleWatch=()=>{setWatching(true);setTimeout(()=>{if(vRef.current){vRef.current.src=vUrl;vRef.current.play().catch(()=>{});}},50);};
-
-  const share=async()=>{
-    setShareError(false);
-    setUploading(true);
-    try {
-      // Upload directly to Cloudinary (unsigned preset — no server needed)
-      const formData = new FormData();
-      formData.append('file', videoBlob, 'reaction.webm');
-      formData.append('upload_preset', 'scmw6ekq');
-      formData.append('folder', 'reactions');
-      formData.append('resource_type', 'video');
-
-      const res = await fetch(
-        'https://api.cloudinary.com/v1_1/dfsvjuevu/video/upload',
-        { method: 'POST', body: formData }
-      );
-
-      if (res.ok) {
-        const data = await res.json();
-        // Build MP4 URL via Cloudinary on-the-fly transcoding
-        const mp4Url = `https://res.cloudinary.com/dfsvjuevu/video/upload/vc_h264,ac_aac,f_mp4/${data.public_id}.mp4`;
-        setUploading(false);
-
-        // Try native share with the MP4 link
-        if (navigator.share) {
-          try {
-            await navigator.share({
-              title: "Ma réaction Gender Reveal 🎉",
-              url: mp4Url,
-              text: `🎉 Regardez ma réaction : ${mp4Url}`
-            });
-            setSent(true); onSend("share"); return;
-          } catch(e) {
-            if (e.name === "AbortError") { return; }
-          }
-        }
-        // Fallback: copy link to clipboard
-        try { await navigator.clipboard.writeText(mp4Url); } catch(e) {}
-        setShareError(true);
-        return;
-      }
-    } catch(e) { console.warn("Upload failed:", e); }
-    setUploading(false);
-    dlOnly();
-    setShareError(true);
+  const handleWatch=()=>{
+    setWatching(true);
+    setTimeout(()=>{
+      if(vRef.current){vRef.current.src=vUrl;vRef.current.play().catch(()=>{});}
+    },50);
   };
+
+  // Upload to Cloudinary and get MP4 link
+  const uploadToCloudinary=async()=>{
+    setUploading(true);
+    setUploadError(false);
+    try{
+      const form=new FormData();
+      form.append('file', videoBlob, `reaction.${ext}`);
+      form.append('upload_preset','scmw6ekq');
+      form.append('folder','reactions');
+      form.append('resource_type','video');
+
+      const res=await fetch('https://api.cloudinary.com/v1_1/dfsvjuevu/video/upload',
+        {method:'POST', body:form});
+
+      if(!res.ok){
+        const err=await res.text();
+        console.error('Cloudinary error:',err);
+        setUploadError(true); setUploading(false); return null;
+      }
+
+      const data=await res.json();
+      // MP4 via Cloudinary transformation
+      const url=`https://res.cloudinary.com/dfsvjuevu/video/upload/vc_h264,ac_aac,f_mp4/${data.public_id}.mp4`;
+      setMp4Link(url);
+      setUploading(false);
+      return url;
+    }catch(e){
+      console.error('Upload error:',e);
+      setUploadError(true); setUploading(false); return null;
+    }
+  };
+
+  const copyLink=async(url)=>{
+    try{await navigator.clipboard.writeText(url);}catch(e){}
+    setLinkCopied(true);
+    setTimeout(()=>setLinkCopied(false),3000);
+  };
+
+  const shareViaWA=(url)=>window.open(`https://wa.me/?text=${encodeURIComponent(`🎉 Ma réaction Gender Reveal : ${url}`)}`, '_blank');
+  const shareViaSMS=(url)=>window.open(`sms:?body=${encodeURIComponent(`🎉 Ma réaction Gender Reveal : ${url}`)}`, '_blank');
+  const shareViaEmail=(url)=>window.open(`mailto:?subject=Ma réaction Gender Reveal&body=${encodeURIComponent(`🎉 Regardez ma réaction : ${url}`)}`, '_blank');
 
   const dlOnly=()=>{
     const a=document.createElement("a");
-    a.href=vUrl;a.download=`ma-reaction-gender-reveal.${ext}`;a.click();
+    a.href=vUrl; a.download=`ma-reaction.${ext}`; a.click();
   };
 
-  const B={width:"100%",padding:"0.9rem 1.5rem",borderRadius:40,fontFamily:"'DM Sans',sans-serif",
-    fontSize:"0.95rem",fontWeight:500,cursor:"pointer",display:"flex",alignItems:"center",
+  const B={width:"100%",padding:"0.85rem 1.2rem",borderRadius:40,fontFamily:"'DM Sans',sans-serif",
+    fontSize:"0.9rem",fontWeight:500,cursor:"pointer",display:"flex",alignItems:"center",
     justifyContent:"center",gap:"0.6rem",border:"none",transition:"opacity 0.15s"};
 
-  return (
-    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:bg,padding:"2rem",overflow:"hidden"}}>
-      <div style={{background:"rgba(0,0,0,0.38)",backdropFilter:"blur(20px)",borderRadius:28,padding:"2rem",maxWidth:420,width:"100%",border:"1px solid rgba(255,255,255,0.18)",textAlign:"center"}}>
+  return(
+    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",
+      justifyContent:"center",background:bg,padding:"1.5rem",overflow:"auto"}}>
+      <div style={{background:"rgba(0,0,0,0.38)",backdropFilter:"blur(20px)",borderRadius:28,
+        padding:"1.5rem",maxWidth:420,width:"100%",border:"1px solid rgba(255,255,255,0.18)",textAlign:"center"}}>
+
         {!sent?<>
-          <div style={{fontSize:"2.8rem",marginBottom:"0.6rem"}}>🎬</div>
-          <h2 style={{fontFamily:"'Playfair Display',serif",color:"white",fontSize:"1.55rem",marginBottom:"0.4rem"}}>{t.captured}</h2>
-          <p style={{color:"rgba(255,255,255,0.6)",fontSize:"0.86rem",marginBottom:"1.6rem",lineHeight:1.55}}>{t.watch} avant de décider si vous voulez l'envoyer aux parents.</p>
+          <div style={{fontSize:"2.5rem",marginBottom:"0.5rem"}}>🎬</div>
+          <h2 style={{fontFamily:"'Playfair Display',serif",color:"white",fontSize:"1.35rem",marginBottom:"0.4rem"}}>
+            {t.captured}
+          </h2>
+
+          {/* Video preview */}
           {watching?(
-            <div style={{borderRadius:16,overflow:"hidden",marginBottom:"1.4rem",background:"#000",aspectRatio:"4/3",position:"relative"}}>
-              <video ref={vRef} playsInline controls loop style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+            <div style={{borderRadius:16,overflow:"hidden",marginBottom:"1rem",background:"#000",aspectRatio:"4/3"}}>
+              <video ref={vRef} playsInline controls loop
+                style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
             </div>
           ):(
-            <div style={{borderRadius:16,overflow:"hidden",marginBottom:"1.4rem",background:"rgba(0,0,0,0.4)",aspectRatio:"4/3",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",border:"1.5px solid rgba(255,255,255,0.15)",cursor:"pointer"}} onClick={handleWatch}>
-              <div style={{width:60,height:60,borderRadius:"50%",background:"rgba(255,255,255,0.9)",display:"flex",alignItems:"center",justifyContent:"center",marginBottom:"0.75rem"}}>
-                <span style={{fontSize:"1.6rem",marginLeft:4}}>▶</span>
+            <div onClick={handleWatch} style={{borderRadius:16,overflow:"hidden",marginBottom:"1rem",
+              background:"rgba(0,0,0,0.4)",aspectRatio:"4/3",display:"flex",flexDirection:"column",
+              alignItems:"center",justifyContent:"center",border:"1.5px solid rgba(255,255,255,0.15)",cursor:"pointer"}}>
+              <div style={{width:56,height:56,borderRadius:"50%",background:"rgba(255,255,255,0.9)",
+                display:"flex",alignItems:"center",justifyContent:"center",marginBottom:"0.6rem"}}>
+                <span style={{fontSize:"1.5rem",marginLeft:4}}>▶</span>
               </div>
-              <p style={{color:"rgba(255,255,255,0.7)",fontSize:"0.85rem"}}>Appuyez pour revoir votre réaction</p>
+              <p style={{color:"rgba(255,255,255,0.7)",fontSize:"0.82rem"}}>Appuyez pour revoir</p>
             </div>
           )}
-          {!watching&&<button onClick={handleWatch} style={{...B,background:"rgba(255,255,255,0.15)",border:"1.5px solid rgba(255,255,255,0.3)",color:"white",marginBottom:"1rem"}}>{t.watch}</button>}
-          <div style={{height:1,background:"rgba(255,255,255,0.12)",margin:"1rem 0"}}/>
 
-          <div style={{display:"flex",flexDirection:"column",gap:"0.6rem",marginBottom:"0.8rem"}}>
-            {/* Native share — lets the device propose all available apps */}
-            <button onClick={share} disabled={uploading}
-              style={{...B,background:"white",color:"#1a1a2e",opacity:uploading?0.7:1}}>
-              {uploading?"⏳ Upload en cours…":"📤 Partager ma réaction"}
+          <div style={{height:1,background:"rgba(255,255,255,0.12)",margin:"0.8rem 0"}}/>
+
+          {/* Step 1: Upload to get MP4 link */}
+          {!mp4Link&&!uploadError&&(
+            <button onClick={uploadToCloudinary} disabled={uploading}
+              style={{...B,background:"white",color:"#1a1a2e",marginBottom:"0.6rem",opacity:uploading?0.7:1}}>
+              {uploading?"⏳ Conversion en cours…":"📤 Préparer pour partage (MP4)"}
             </button>
-            {/* Download only — stays on device */}
-            <button onClick={dlOnly}
-              style={{...B,background:"rgba(255,255,255,0.1)",border:"1.5px solid rgba(255,255,255,0.25)",color:"rgba(255,255,255,0.8)"}}>
-              ⬇️ Télécharger sur mon appareil
-            </button>
-          </div>
-          {shareError&&(
-            <div style={{background:"rgba(255,255,255,0.1)",borderRadius:12,padding:"0.75rem",marginBottom:"0.75rem",fontSize:"0.78rem",color:"rgba(255,255,255,0.85)",lineHeight:1.5}}>
-              💡 Lien copié dans le presse-papier ! Collez-le sur WhatsApp, par SMS ou par email.
+          )}
+
+          {/* Upload error */}
+          {uploadError&&(
+            <div style={{background:"rgba(255,80,80,0.2)",borderRadius:12,padding:"0.75rem",
+              marginBottom:"0.6rem",fontSize:"0.8rem",color:"rgba(255,255,255,0.9)"}}>
+              ❌ Échec de l'upload. Utilisez le téléchargement ci-dessous.
+              <button onClick={uploadToCloudinary} style={{display:"block",margin:"0.5rem auto 0",
+                background:"rgba(255,255,255,0.2)",border:"1px solid rgba(255,255,255,0.3)",
+                color:"white",padding:"0.3rem 0.8rem",borderRadius:20,cursor:"pointer",fontSize:"0.78rem"}}>
+                Réessayer
+              </button>
             </div>
           )}
+
+          {/* Step 2: Share options with MP4 link */}
+          {mp4Link&&(
+            <div style={{marginBottom:"0.6rem"}}>
+              {/* Link box */}
+              <div style={{background:"rgba(255,255,255,0.1)",borderRadius:12,padding:"0.6rem 0.8rem",
+                marginBottom:"0.6rem",display:"flex",alignItems:"center",gap:"0.5rem"}}>
+                <span style={{fontSize:"0.7rem",color:"rgba(255,255,255,0.7)",flex:1,
+                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",textAlign:"left"}}>
+                  {mp4Link.slice(0,45)}…
+                </span>
+                <button onClick={()=>copyLink(mp4Link)}
+                  style={{background:"rgba(255,255,255,0.2)",border:"none",color:"white",
+                    padding:"0.3rem 0.7rem",borderRadius:20,cursor:"pointer",fontSize:"0.75rem",
+                    whiteSpace:"nowrap",fontFamily:"'DM Sans',sans-serif"}}>
+                  {linkCopied?"✓ Copié !":"Copier"}
+                </button>
+              </div>
+              {/* Direct share buttons */}
+              <div style={{display:"flex",flexDirection:"column",gap:"0.5rem"}}>
+                <button onClick={()=>shareViaWA(mp4Link)}
+                  style={{...B,background:"#25D366",color:"white"}}>
+                  💬 Partager sur WhatsApp
+                </button>
+                <button onClick={()=>shareViaSMS(mp4Link)}
+                  style={{...B,background:"rgba(255,255,255,0.15)",border:"1.5px solid rgba(255,255,255,0.3)",color:"white"}}>
+                  📱 Envoyer par SMS
+                </button>
+                <button onClick={()=>shareViaEmail(mp4Link)}
+                  style={{...B,background:"rgba(255,255,255,0.1)",border:"1.5px solid rgba(255,255,255,0.2)",color:"rgba(255,255,255,0.8)",fontSize:"0.85rem"}}>
+                  ✉️ Envoyer par email
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Download fallback */}
+          <button onClick={dlOnly}
+            style={{...B,background:"rgba(255,255,255,0.08)",border:"1.5px solid rgba(255,255,255,0.15)",
+              color:"rgba(255,255,255,0.6)",fontSize:"0.82rem",marginTop:"0.4rem"}}>
+            ⬇️ Télécharger sur mon appareil
+          </button>
+
           <button onClick={onDiscard}
-            style={{background:"none",border:"none",color:"rgba(255,255,255,0.35)",fontSize:"0.8rem",cursor:"pointer",textDecoration:"underline",fontFamily:"'DM Sans',sans-serif"}}>
+            style={{background:"none",border:"none",color:"rgba(255,255,255,0.3)",fontSize:"0.78rem",
+              cursor:"pointer",textDecoration:"underline",fontFamily:"'DM Sans',sans-serif",marginTop:"0.6rem",display:"block",width:"100%"}}>
             Fermer sans partager
           </button>
         </>:<div style={{padding:"1rem 0"}}>
           <div style={{fontSize:"3.5rem",marginBottom:"0.75rem"}}>🎉</div>
           <p style={{color:"white",fontFamily:"'Playfair Display',serif",fontSize:"1.3rem",marginBottom:"0.5rem"}}>{t.sent}</p>
           <p style={{color:"rgba(255,255,255,0.6)",fontSize:"0.85rem",marginBottom:"2rem",lineHeight:1.5}}>{t.sent_sub}</p>
-          <button onClick={onDiscard} style={{...B,background:"rgba(255,255,255,0.2)",border:"1.5px solid rgba(255,255,255,0.3)",color:"white"}}>{t.close}</button>
+          <button onClick={onDiscard} style={{...B,background:"rgba(255,255,255,0.2)",
+            border:"1.5px solid rgba(255,255,255,0.3)",color:"white"}}>{t.close}</button>
         </div>}
       </div>
     </div>
