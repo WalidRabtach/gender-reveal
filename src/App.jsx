@@ -1133,15 +1133,37 @@ function ReactionReview({videoBlob,gender,slug,onSend,onDiscard}) {
 
   const share=async()=>{
     setShareError(false);
-    const file=new File([videoBlob],`ma-reaction.${ext}`,{type:videoBlob.type});
-    if(navigator.canShare&&navigator.canShare({files:[file]})){
-      try{
-        await navigator.share({files:[file],title:"Ma réaction Gender Reveal 🎉"});
-        setSent(true);onSend("share");return;
-      }catch(e){
-        if(e.name==="AbortError")return;
+    setUploading(true);
+    try {
+      // Upload to Cloudinary via serverless function → get MP4 link
+      const res = await fetch('/api/upload-reaction', {
+        method: 'POST',
+        headers: { 'Content-Type': videoBlob.type },
+        body: videoBlob,
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.mp4Url) {
+          setUploading(false);
+          // Share the MP4 link — works on WhatsApp, SMS, Mail
+          const shareText = `🎉 Ma réaction Gender Reveal — ${data.mp4Url}`;
+          if (navigator.share) {
+            try {
+              await navigator.share({ title: "Ma réaction Gender Reveal 🎉", url: data.mp4Url, text: shareText });
+              setSent(true); onSend("share"); return;
+            } catch(e) {
+              if (e.name === "AbortError") return;
+            }
+          }
+          // Fallback: copy link to clipboard
+          try { await navigator.clipboard.writeText(data.mp4Url); } catch(e) {}
+          setShareError(true); // show "link copied" message
+          return;
+        }
       }
-    }
+    } catch(e) { console.warn("Upload failed:", e); }
+    setUploading(false);
+    // If upload fails: fallback to local download
     dlOnly();
     setShareError(true);
   };
@@ -1191,7 +1213,7 @@ function ReactionReview({videoBlob,gender,slug,onSend,onDiscard}) {
           </div>
           {shareError&&(
             <div style={{background:"rgba(255,255,255,0.1)",borderRadius:12,padding:"0.75rem",marginBottom:"0.75rem",fontSize:"0.78rem",color:"rgba(255,255,255,0.85)",lineHeight:1.5}}>
-              💡 Vidéo téléchargée ! Partagez-la depuis votre galerie photo.
+              💡 Lien copié ! Partagez-le sur WhatsApp, par SMS ou par email.
             </div>
           )}
           <button onClick={onDiscard}
@@ -1261,87 +1283,34 @@ function RevealPage({config,onBack}) {
     setFlow("animating");
     audio.play(config.anim,config.gender);
 
-    if(streamRef.current&&window.MediaRecorder&&compRef.current){
+    if(streamRef.current&&window.MediaRecorder){
       chunksRef.current=[];
 
-      const canvas=compRef.current;
-      const ctx2d=canvas.getContext("2d");
-      canvas.width=640; canvas.height=480;
+      // Build a combined stream: camera video + Web Audio output
+      const combinedStream=new MediaStream();
 
-      // Composite loop: colored bg + camera PiP
-      let compositing=true;
-      let currentPhaseRef={v:0};
+      // Add camera video track
+      streamRef.current.getVideoTracks().forEach(t=>combinedStream.addTrack(t));
 
-      const drawFrame=()=>{
-        if(!compositing)return;
-        const W=canvas.width, H=canvas.height;
-
-        // Background color: neutral until phase 2
-        const ph=currentPhaseRef.v;
-        const bgColor = ph<2 ? "#1a1209"
-          : config.gender==="girl" ? "#C44569" : "#2C5F8A";
-        ctx2d.fillStyle=bgColor;
-        ctx2d.fillRect(0,0,W,H);
-
-        // Draw "Gender Reveal" text as visual indicator
-        ctx2d.fillStyle=ph<2?"#C9A96E":"white";
-        ctx2d.font=`bold ${W*0.04}px serif`;
-        ctx2d.textAlign="center";
-        ctx2d.fillText(
-          ph<2 ? "✨ Gender Reveal ✨" :
-          config.gender==="girl" ? "C'est une fille ! 🩷" : "C'est un garçon ! 🩵",
-          W/2, H*0.12
-        );
-
-        // Progress bar at bottom
-        if(ph<2){
-          ctx2d.fillStyle="rgba(255,255,255,0.15)";
-          ctx2d.fillRect(W*0.1, H*0.88, W*0.8, 6);
-          ctx2d.fillStyle="#C9A96E";
-          ctx2d.fillRect(W*0.1, H*0.88, W*0.8*Math.min((Date.now()%30000)/30000,1), 6);
-        }
-
-        // Camera PiP — centered, large
-        const camEl=document.querySelector(".cam-pip-video");
-        if(camEl&&camEl.readyState>=2){
-          const pw=W*0.7, ph2=H*0.65;
-          const px=(W-pw)/2, py=(H-ph2)/2+H*0.05;
-          ctx2d.save();
-          ctx2d.translate(px+pw, py); ctx2d.scale(-1,1); // mirror
-          ctx2d.drawImage(camEl,0,0,pw,ph2);
-          ctx2d.restore();
-          // REC badge
-          ctx2d.fillStyle="rgba(0,0,0,0.6)";
-          ctx2d.beginPath(); ctx2d.roundRect(px+8,py+8,52,22,11); ctx2d.fill();
-          ctx2d.fillStyle="#FF3B30";
-          ctx2d.beginPath(); ctx2d.arc(px+20,py+19,5,0,Math.PI*2); ctx2d.fill();
-          ctx2d.fillStyle="white"; ctx2d.font="bold 11px sans-serif";
-          ctx2d.textAlign="left"; ctx2d.fillText("REC",px+29,py+23);
-        }
-
-        requestAnimationFrame(drawFrame);
-      };
-      drawFrame();
-
-      // Capture canvas stream
-      const canvasStream=canvas.captureStream(25);
-
-      // Add direct Web Audio output (no mic artifacts)
+      // Add Web Audio output directly (high quality, no mic artifacts)
       const audioTrack=audio.getAudioTrack();
-      if(audioTrack) canvasStream.addTrack(audioTrack);
+      if(audioTrack) combinedStream.addTrack(audioTrack);
 
       const mimeTypes=[
-        "video/webm;codecs=vp8,opus","video/webm;codecs=vp9,opus",
-        "video/webm","video/mp4",""
+        "video/webm;codecs=vp8,opus",
+        "video/webm;codecs=vp9,opus",
+        "video/webm",""
       ];
-      const mime=mimeTypes.find(m=>{try{return m===""||MediaRecorder.isTypeSupported(m);}catch(e){return false;}})||"";
+      const mime=mimeTypes.find(m=>{
+        try{return m===""||MediaRecorder.isTypeSupported(m);}catch(e){return false;}
+      })||"";
 
       try{
-        const rec=new MediaRecorder(canvasStream,mime?{mimeType:mime,videoBitsPerSecond:2000000}:{});
+        const rec=new MediaRecorder(combinedStream,
+          mime?{mimeType:mime,videoBitsPerSecond:2500000}:{videoBitsPerSecond:2500000});
         recRef.current=rec;
         rec.ondataavailable=e=>{if(e.data?.size>0)chunksRef.current.push(e.data);};
-        rec.start(500);
-        compRef._stopComposite=()=>{compositing=false;};
+        rec.start(300);
       }catch(e){console.warn("Recording failed:",e);}
     }
 
@@ -1353,27 +1322,34 @@ function RevealPage({config,onBack}) {
       setProg(p);
       if(p>=1&&cur<phases.length-1){
         cur++;t0Ref.current=now;setPhase(cur);
-        if(compRef.current) compRef._phaseRef=cur;
         if(cur===2){
           const cfx=document.getElementById("cfx");
-          if(cfx&&["confetti","gift","rainbow"].includes(config.anim))runConfetti(cfx,config.gender,12000);
+          if(cfx&&["confetti","gift","rainbow"].includes(config.anim))
+            runConfetti(cfx,config.gender,12000);
         }
       }
       if(p>=1&&cur===phases.length-1){
         cancelAnimationFrame(rafRef.current);
+        // Wait 7s to capture reaction after reveal
         setTimeout(()=>{
           audio.stop();
-          compRef._stopComposite?.();
           if(recRef.current&&recRef.current.state!=="inactive"){
             recRef.current.onstop=()=>{
               const mimeType=recRef.current.mimeType||"video/webm";
               const b=new Blob(chunksRef.current,{type:mimeType});
               streamRef.current?.getTracks().forEach(t=>t.stop());
-              if(b.size>5000){setBlob(b);setFlow("review");}
-              else setFlow("done");
+              if(b.size>10000){
+                setBlob(b);
+                setFlow("review");
+              }else{
+                setFlow("done");
+              }
             };
             recRef.current.stop();
-          }else setFlow("done");
+          }else{
+            streamRef.current?.getTracks().forEach(t=>t.stop());
+            setFlow("done");
+          }
         },7000);
         return;
       }
