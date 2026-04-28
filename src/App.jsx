@@ -1135,35 +1135,44 @@ function ReactionReview({videoBlob,gender,slug,onSend,onDiscard}) {
     setShareError(false);
     setUploading(true);
     try {
-      // Upload to Cloudinary via serverless function → get MP4 link
-      const res = await fetch('/api/upload-reaction', {
-        method: 'POST',
-        headers: { 'Content-Type': videoBlob.type },
-        body: videoBlob,
-      });
+      // Upload directly to Cloudinary (unsigned preset — no server needed)
+      const formData = new FormData();
+      formData.append('file', videoBlob, 'reaction.webm');
+      formData.append('upload_preset', 'scmw6ekq');
+      formData.append('folder', 'reactions');
+      formData.append('resource_type', 'video');
+
+      const res = await fetch(
+        'https://api.cloudinary.com/v1_1/dfsvjuevu/video/upload',
+        { method: 'POST', body: formData }
+      );
+
       if (res.ok) {
         const data = await res.json();
-        if (data.mp4Url) {
-          setUploading(false);
-          // Share the MP4 link — works on WhatsApp, SMS, Mail
-          const shareText = `🎉 Ma réaction Gender Reveal — ${data.mp4Url}`;
-          if (navigator.share) {
-            try {
-              await navigator.share({ title: "Ma réaction Gender Reveal 🎉", url: data.mp4Url, text: shareText });
-              setSent(true); onSend("share"); return;
-            } catch(e) {
-              if (e.name === "AbortError") return;
-            }
+        // Build MP4 URL via Cloudinary on-the-fly transcoding
+        const mp4Url = `https://res.cloudinary.com/dfsvjuevu/video/upload/vc_h264,ac_aac,f_mp4/${data.public_id}.mp4`;
+        setUploading(false);
+
+        // Try native share with the MP4 link
+        if (navigator.share) {
+          try {
+            await navigator.share({
+              title: "Ma réaction Gender Reveal 🎉",
+              url: mp4Url,
+              text: `🎉 Regardez ma réaction : ${mp4Url}`
+            });
+            setSent(true); onSend("share"); return;
+          } catch(e) {
+            if (e.name === "AbortError") { return; }
           }
-          // Fallback: copy link to clipboard
-          try { await navigator.clipboard.writeText(data.mp4Url); } catch(e) {}
-          setShareError(true); // show "link copied" message
-          return;
         }
+        // Fallback: copy link to clipboard
+        try { await navigator.clipboard.writeText(mp4Url); } catch(e) {}
+        setShareError(true);
+        return;
       }
     } catch(e) { console.warn("Upload failed:", e); }
     setUploading(false);
-    // If upload fails: fallback to local download
     dlOnly();
     setShareError(true);
   };
@@ -1203,7 +1212,7 @@ function ReactionReview({videoBlob,gender,slug,onSend,onDiscard}) {
             {/* Native share — lets the device propose all available apps */}
             <button onClick={share} disabled={uploading}
               style={{...B,background:"white",color:"#1a1a2e",opacity:uploading?0.7:1}}>
-              {uploading?"⏳…":"📤 Partager ma réaction"}
+              {uploading?"⏳ Upload en cours…":"📤 Partager ma réaction"}
             </button>
             {/* Download only — stays on device */}
             <button onClick={dlOnly}
@@ -1213,7 +1222,7 @@ function ReactionReview({videoBlob,gender,slug,onSend,onDiscard}) {
           </div>
           {shareError&&(
             <div style={{background:"rgba(255,255,255,0.1)",borderRadius:12,padding:"0.75rem",marginBottom:"0.75rem",fontSize:"0.78rem",color:"rgba(255,255,255,0.85)",lineHeight:1.5}}>
-              💡 Lien copié ! Partagez-le sur WhatsApp, par SMS ou par email.
+              💡 Lien copié dans le presse-papier ! Collez-le sur WhatsApp, par SMS ou par email.
             </div>
           )}
           <button onClick={onDiscard}
