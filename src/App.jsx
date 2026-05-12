@@ -411,10 +411,26 @@ const ANIMS = [
   {id:"balloons",icon:"🎈",name:{fr:"Ballons",en:"Balloons",es:"Globos",de:"Ballons",pt:"Balões",it:"Palloncini",ar:"بالونات",zh:"气球"}},
   {id:"confetti",icon:"🎉",name:{fr:"Confettis",en:"Confetti",es:"Confetis",de:"Konfetti",pt:"Confetes",it:"Coriandoli",ar:"قصاصات",zh:"彩纸"}},
   {id:"stars",icon:"✨",name:{fr:"Étoiles",en:"Stars",es:"Estrellas",de:"Sterne",pt:"Estrelas",it:"Stelle",ar:"نجوم",zh:"星星"}},
-  {id:"gift",icon:"🎁",name:{fr:"Cadeau",en:"Gift",es:"Regalo",de:"Geschenk",pt:"Presente",it:"Regalo",ar:"هدية",zh:"礼物"}},
-  {id:"butterfly",icon:"🦋",name:{fr:"Papillons",en:"Butterflies",es:"Mariposas",de:"Schmetterlinge",pt:"Borboletas",it:"Farfalle",ar:"فراشات",zh:"蝴蝶"}},
-  {id:"rainbow",icon:"🌈",name:{fr:"Arc-en-ciel",en:"Rainbow",es:"Arcoíris",de:"Regenbogen",pt:"Arco-íris",it:"Arcobaleno",ar:"قوس قزح",zh:"彩虹"}},
 ];
+
+// Video-based animations map
+const VIDEO_ANIMS = {
+  balloons: { girl: "/videos/ballons-fille.mp4",   boy: "/videos/ballons-garcon.mp4"   },
+  confetti: { girl: "/videos/confettis-fille.mp4", boy: "/videos/confettis-garcon.mp4" },
+  stars:    { girl: "/videos/etoiles-fille.mp4",   boy: "/videos/etoiles-garcon.mp4"   },
+};
+
+// Language overlay map
+const OVERLAY = {
+  fr: { girl: "/overlays/fr_fille.png",  boy: "/overlays/fr_garcon.png"  },
+  en: { girl: "/overlays/en_fille.png",  boy: "/overlays/en_garcon.png"  },
+  es: { girl: "/overlays/es_fille.png",  boy: "/overlays/es_garcon.png"  },
+  de: { girl: "/overlays/de_fille.png",  boy: "/overlays/de_garcon.png"  },
+  pt: { girl: "/overlays/pt_fille.png",  boy: "/overlays/pt_garcon.png"  },
+  it: { girl: "/overlays/it_fille.png",  boy: "/overlays/it_garcon.png"  },
+  ar: { girl: "/overlays/ar_fille.png",  boy: "/overlays/ar_garcon.png"  },
+  zh: { girl: "/overlays/zh_fille.png",  boy: "/overlays/zh_garcon.png"  },
+};
 
 // ─── Audio Engine ─────────────────────────────────────────────────────────────
 class FairyAudio {
@@ -1301,6 +1317,49 @@ function ReactionReview({videoBlob,gender,slug,onSend,onDiscard}) {
   );
 }
 
+// ─── SceneVideo — real video + language text overlay ────────────────────────
+function SceneVideo({ config, onEnded }) {
+  const { lang } = useLang();
+  const [showText, setShowText] = useState(false);
+  const [fadeIn, setFadeIn]     = useState(false);
+
+  const gender     = config.gender === "girl" ? "girl" : "boy";
+  const videoSrc   = VIDEO_ANIMS[config.anim]?.[gender] || "";
+  const overlaySrc = (OVERLAY[lang] || OVERLAY.fr)[gender];
+
+  useEffect(() => {
+    const t1 = setTimeout(() => setShowText(true), 9000);
+    const t2 = setTimeout(() => setFadeIn(true),   9100);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, []);
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"#000" }}>
+      <video
+        src={videoSrc}
+        autoPlay
+        playsInline
+        style={{ width:"100%", height:"100%", objectFit:"cover", display:"block" }}
+        onEnded={() => setTimeout(onEnded, 1500)}
+      />
+      {showText && (
+        <img
+          src={overlaySrc}
+          alt=""
+          style={{
+            position:"absolute", inset:0,
+            width:"100%", height:"100%",
+            objectFit:"cover",
+            opacity: fadeIn ? 1 : 0,
+            transition:"opacity 1.2s ease",
+            pointerEvents:"none",
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 // ─── Reveal Page ──────────────────────────────────────────────────────────────
 function RevealPage({config,onBack}) {
   const {t}=useLang();
@@ -1388,43 +1447,7 @@ function RevealPage({config,onBack}) {
       }catch(e){console.warn("Recording failed:",e);}
     }
 
-    let cur=0; t0Ref.current=performance.now();
-    const phases=PHASES[config.anim]||PHASES.confetti;
-
-    const tick=(now)=>{
-      const el=now-t0Ref.current,d=phases[cur].d,p=Math.min(el/d,1);
-      setProg(p);
-      if(p>=1&&cur<phases.length-1){
-        cur++;t0Ref.current=now;setPhase(cur);
-        if(cur===2){
-          const cfx=document.getElementById("cfx");
-          if(cfx&&["confetti","gift","rainbow"].includes(config.anim))
-            runConfetti(cfx,config.gender,12000);
-        }
-      }
-      if(p>=1&&cur===phases.length-1){
-        cancelAnimationFrame(rafRef.current);
-        setTimeout(()=>{
-          audio.stop();
-          if(recRef.current&&recRef.current.state!=="inactive"){
-            recRef.current.onstop=()=>{
-              const mimeType=recRef.current.mimeType||"video/webm";
-              const b=new Blob(chunksRef.current,{type:mimeType});
-              streamRef.current?.getTracks().forEach(t=>t.stop());
-              if(b.size>10000){setBlob(b);setFlow("review");}
-              else setFlow("done");
-            };
-            recRef.current.stop();
-          }else{
-            streamRef.current?.getTracks().forEach(t=>t.stop());
-            setFlow("done");
-          }
-        },7000);
-        return;
-      }
-      rafRef.current=requestAnimationFrame(tick);
-    };
-    rafRef.current=requestAnimationFrame(tick);
+    // Video handles its own timing via onEnded callback in SceneVideo
   };
 
   useEffect(()=>()=>{
@@ -1493,31 +1516,40 @@ function RevealPage({config,onBack}) {
       )}
 
       {flow==="animating"&&<>
-        {/* Canvas hidden but visible to GPU for capture */}
-        <canvas ref={compRef}
-          style={{position:"fixed",top:0,left:0,width:1,height:1,opacity:0,pointerEvents:"none"}}
-          width={640} height={480}/>
-        {/* Camera PiP — visible during animation */}
+        <canvas ref={compRef} style={{position:"fixed",top:0,left:0,width:1,height:1,opacity:0,pointerEvents:"none"}} width={640} height={480}/>
+        {/* SceneVideo handles video + text overlay */}
+        <SceneVideo
+          config={config}
+          onEnded={()=>{
+            audio.stop();
+            if(recRef.current&&recRef.current.state!=="inactive"){
+              recRef.current.onstop=()=>{
+                const mimeType=recRef.current.mimeType||"video/webm";
+                const b=new Blob(chunksRef.current,{type:mimeType});
+                streamRef.current?.getTracks().forEach(t=>t.stop());
+                if(b.size>10000){setBlob(b);setFlow("review");}
+                else setFlow("done");
+              };
+              recRef.current.stop();
+            }else{
+              streamRef.current?.getTracks().forEach(t=>t.stop());
+              setFlow("done");
+            }
+          }}
+        />
+        {/* Camera PiP overlay */}
         {camOn&&streamRef.current&&(
           <div style={{position:"fixed",bottom:20,right:16,zIndex:200,borderRadius:14,overflow:"hidden",border:"2px solid rgba(255,255,255,0.7)",boxShadow:"0 4px 24px rgba(0,0,0,0.6)",width:110,height:82,background:"#000"}}>
-            <video
-              autoPlay muted playsInline
+            <video autoPlay muted playsInline
               className="cam-pip-video"
-              ref={el=>{
-                if(el&&streamRef.current&&el.srcObject!==streamRef.current){
-                  el.srcObject=streamRef.current;
-                  el.play().catch(()=>{});
-                }
-              }}
-              style={{width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)",display:"block"}}
-            />
+              ref={el=>{if(el&&streamRef.current&&el.srcObject!==streamRef.current){el.srcObject=streamRef.current;el.play().catch(()=>{});}}}
+              style={{width:"100%",height:"100%",objectFit:"cover",transform:"scaleX(-1)",display:"block"}}/>
             <div style={{position:"absolute",top:4,left:5,display:"flex",alignItems:"center",gap:3,background:"rgba(0,0,0,0.6)",borderRadius:20,padding:"2px 6px"}}>
               <div style={{width:6,height:6,borderRadius:"50%",background:"#FF3B30",animation:"twinkle 1s infinite"}}/>
               <span style={{fontSize:"0.52rem",color:"white",fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.06em"}}>REC</span>
             </div>
           </div>
         )}
-        <Scene phase={phase} progress={prog} gender={config.gender}/>
       </>}
     </div>
   );
